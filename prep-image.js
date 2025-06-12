@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+//const fsnp = require('fs');
+const { Readable } = require('stream');
 const inky = require('@aeroniemi/inky')
 const sharp = require('sharp');
 const fs = require('fs').promises;
@@ -110,30 +112,24 @@ function quantizeToEinkPalette(imageData, width, height, palette) {
     return Buffer.from(data);
 }
 
-async function processImage(inputFile, outputFile, options) {
+async function processImage(buf, options) {
     try {
-        console.log(`Processing: ${inputFile} -> ${outputFile}`);
         
-        // Check if input file exists
-        try {
-            await fs.access(inputFile);
-        } catch (error) {
-            throw new Error(`Input file '${inputFile}' does not exist`);
-        }
-        
-        // Load and get metadata of the input image
-        const image = sharp(inputFile);
+        const image = sharp(buf);
         const metadata = await image.metadata();
-        
+        console.log(metadata);
         console.log(`Original size: ${metadata.width}x${metadata.height}`);
         
         // Calculate resize dimensions maintaining aspect ratio
-        const scaleW = TARGET_WIDTH / metadata.width;
-        const scaleH = TARGET_HEIGHT / metadata.height;
-        const scale = Math.min(scaleW, scaleH);
+        const scaleW    = TARGET_WIDTH / metadata.width;
+        const scaleH    = TARGET_HEIGHT / metadata.height;
+        const scale     = Math.min(scaleW, scaleH);
         
-        const newWidth = Math.round(metadata.width * scale);
+        // Calculate position to center the resized image
+        const newWidth  = Math.round(metadata.width * scale);
         const newHeight = Math.round(metadata.height * scale);
+        const left      = Math.round((TARGET_WIDTH - newWidth) / 2);
+        const top       = Math.round((TARGET_HEIGHT - newHeight) / 2);
         
         console.log(`Scaled size: ${newWidth}x${newHeight}`);
         
@@ -145,44 +141,41 @@ async function processImage(inputFile, outputFile, options) {
                 channels: 3,
                 background: { r: 255, g: 255, b: 255 }
             }
-        });
-        
+        }).removeAlpha(); // removeAlpha required here - channels:3 isn't honoured!!
+
         // Resize the input image
-        const resizedImage = await image
-            .resize(newWidth, newHeight, {
-                kernel: sharp.kernel.lanczos3,
-                fit: 'inside'
-            })
-            .toBuffer();
-        
-        // Calculate position to center the resized image
-        const left = Math.round((TARGET_WIDTH - newWidth) / 2);
-        const top = Math.round((TARGET_HEIGHT - newHeight) / 2);
+        const resizedImageBuf = await image
+              .resize(newWidth, newHeight, {
+                  kernel: sharp.kernel.lanczos3,
+                  fit: 'inside'
+              })
+	      .toBuffer();
+	console.log(`Resized. Compositing...`);
         
         // Composite the resized image onto the canvas
         let processedImage = await canvas
             .composite([{
-                input: resizedImage,
+                input: resizedImageBuf,
                 left: left,
                 top: top
             }])
-            .raw()
-            .toBuffer();
+	    .raw()
+	    .toBuffer();
         
         console.log('Mapping to e-ink palette...');
-        
+
         // Apply color mapping and optional dithering
         if (options.dither) {
             console.log('Applying Floyd-Steinberg dithering...');
             processedImage = applyFloydSteinbergDithering(
-                processedImage, 
+                await processedImage,
                 TARGET_WIDTH, 
                 TARGET_HEIGHT, 
                 EINK_PALETTE
             );
         } else {
             processedImage = quantizeToEinkPalette(
-                processedImage, 
+                await processedImage,
                 TARGET_WIDTH, 
                 TARGET_HEIGHT, 
                 EINK_PALETTE
@@ -201,17 +194,12 @@ async function processImage(inputFile, outputFile, options) {
         // Enhance contrast for e-ink display
         await finalImage
             .normalize()
-/*            .jpeg({ 
-                quality: options.quality,
-                progressive: false,
-                mozjpeg: true
-            })*/
             .toFile('output.png', (err, info) => {
 		frame.display_png('output.png')
 		frame.show()
+		fs.unlink('output.png')
 	    });
         
-        console.log(`Successfully created: ${outputFile}`);
         console.log(`Final size: ${TARGET_WIDTH}x${TARGET_HEIGHT}`);
         
         // Show palette info if requested
@@ -232,8 +220,6 @@ program
     .name('inky-processor')
     .description('Prepare JPG images for Inky Impression 7.3" e-ink display')
     .version('1.0.0')
-    .argument('<input>', 'Input image file')
-    .argument('<output>', 'Output image file')
     .option('-q, --quality <number>', 'Output JPEG quality (1-100)', '85')
     .option('-d, --dither', 'Enable Floyd-Steinberg dithering for better color transitions')
     .option('-p, --preview', 'Show palette preview information')
@@ -256,7 +242,6 @@ Requirements:
 program.parse();
 
 const options = program.opts();
-const [inputFile, outputFile] = program.args;
 
 // Validate quality parameter
 const quality = parseInt(options.quality);
@@ -265,24 +250,18 @@ if (isNaN(quality) || quality < 1 || quality > 100) {
     process.exit(1);
 }
 
-// Check for required modules
-try {
-    require('sharp');
-    require('commander');
-} catch (error) {
-    console.error('Error: Required modules not found. Please install with:');
-    console.error('npm install sharp commander');
-    process.exit(1);
-}
-
-// Process the image
-processImage(inputFile, outputFile, {
-    quality: quality,
-    dither: options.dither || false,
-    preview: options.preview || false
-}).then(() => {
-    console.log('\nImage prepared for Inky Impression 7.3" display!');
-}).catch(error => {
-    console.error(error.message);
-    process.exit(1);
-});
+fetch('https://picsum.photos/800/480')
+    .then(x => x.arrayBuffer())
+    .then(x => {
+	// Process the image
+	processImage(Buffer.from(x), {
+	    quality: quality,
+	    dither: options.dither || false,
+	    preview: options.preview || false
+	}).then(() => {
+	    console.log('\nImage prepared for Inky Impression 7.3" display!');
+	}).catch(error => {
+	    console.error(error.message);
+	    process.exit(1);
+	});
+    })

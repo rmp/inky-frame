@@ -1,6 +1,7 @@
 {
   "dependencies": {
     "@aeroniemi/inky": "^0.2.0",
+    "commander": "^14.0.0",
     "pkg": "^5.8.1",
     "sharp": "^0.34.2"
   }

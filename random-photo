@@ -1,6 +1,0 @@
-#!/bin/bash
-
-wget -O- "https://picsum.photos/800/480" > tmp.jpg
-node prep-image.js --dither tmp.jpg output.jpg
-
-rm -f tmp.jpg output.jpg output.png
