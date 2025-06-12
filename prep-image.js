@@ -201,12 +201,12 @@ async function processImage(inputFile, outputFile, options) {
         // Enhance contrast for e-ink display
         await finalImage
             .normalize()
-            .jpeg({ 
+/*            .jpeg({ 
                 quality: options.quality,
                 progressive: false,
                 mozjpeg: true
-            })
-            .toFile('tmp.png', (err, info) => {
+            })*/
+            .toFile('output.png', (err, info) => {
 		frame.display_png('output.png')
 		frame.show()
 	    });
@@ -282,7 +282,6 @@ processImage(inputFile, outputFile, {
     preview: options.preview || false
 }).then(() => {
     console.log('\nImage prepared for Inky Impression 7.3" display!');
-    console.log(`You can now transfer '${outputFile}' to your Raspberry Pi.`);
 }).catch(error => {
     console.error(error.message);
     process.exit(1);
