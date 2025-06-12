@@ -1,4 +1,5 @@
 *.png
 *.jpg
 node_modules/
+KEY.json
 
