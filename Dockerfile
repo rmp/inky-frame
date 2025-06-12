@@ -5,5 +5,4 @@ RUN apt-get update \
     && curl -fsSL https://deb.nodesource.com/setup_20.x -o nodesource_setup.sh \
     && bash nodesource_setup.sh \
     && rm -f nodesource_setup.sh \
-    && apt-get install -y nodejs \
-    && npm ci
+    && apt-get install -y nodejs
