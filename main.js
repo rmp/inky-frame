@@ -213,12 +213,12 @@ program
     .version('1.0.0')
     .option('-q, --quality <number>', 'Output JPEG quality (1-100)', '85')
     .option('-p, --preview', 'Show palette preview information')
+    .option('-i, --image <png>', 'Alternative image to display')
     .helpOption('-h, --help', 'Show help information')
     .addHelpText('after', `
 Examples:
-  $ node inky-processor.js photo.jpg inky_photo.jpg
-  $ node inky-processor.js --quality 90 landscape.jpg display_ready.jpg
-  $ node inky-processor.js --preview image.jpg result.jpg
+  $ node inky-processor.js
+  $ node inky-processor.js --image image.jpg
 
 This script prepares images for the Inky Impression 7.3" e-ink display by:
 - Resizing to 800x480 pixels (maintaining aspect ratio with letterboxing)
@@ -240,11 +240,23 @@ if (isNaN(quality) || quality < 1 || quality > 100) {
     process.exit(1);
 }
 
-fetch('https://picsum.photos/800/480')
-    .then(x => x.arrayBuffer())
+const loadfile = async (fn) => {
+    let data;
+
+    if(fn) {
+	data = await fs.readFile(fn, null);
+    } else {
+	data = await fetch('https://picsum.photos/800/480')
+	    .then(x => x.arrayBuffer())
+    }
+    return Buffer.from(data);
+};
+
+
+loadfile(options.image)
     .then(x => {
 	// Process the image
-	processImage(Buffer.from(x), {
+	processImage(x, {
 	    quality: quality,
 	    dither: options.dither || false,
 	    preview: options.preview || false
@@ -254,4 +266,4 @@ fetch('https://picsum.photos/800/480')
 	    console.error(error.message);
 	    process.exit(1);
 	});
-    })
+    });
