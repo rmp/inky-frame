@@ -165,23 +165,14 @@ async function processImage(buf, options) {
         console.log('Mapping to e-ink palette...');
 
         // Apply color mapping and optional dithering
-        if (options.dither) {
-            console.log('Applying Floyd-Steinberg dithering...');
-            processedImage = applyFloydSteinbergDithering(
-                await processedImage,
-                TARGET_WIDTH, 
-                TARGET_HEIGHT, 
-                EINK_PALETTE
-            );
-        } else {
-            processedImage = quantizeToEinkPalette(
-                await processedImage,
-                TARGET_WIDTH, 
-                TARGET_HEIGHT, 
-                EINK_PALETTE
-            );
-        }
-        
+        console.log('Applying Floyd-Steinberg dithering...');
+        processedImage = applyFloydSteinbergDithering(
+            await processedImage,
+            TARGET_WIDTH, 
+            TARGET_HEIGHT, 
+            EINK_PALETTE
+        );
+                
         // Convert back to image and apply post-processing
         const finalImage = sharp(processedImage, {
             raw: {
@@ -221,14 +212,13 @@ program
     .description('Prepare JPG images for Inky Impression 7.3" e-ink display')
     .version('1.0.0')
     .option('-q, --quality <number>', 'Output JPEG quality (1-100)', '85')
-    .option('-d, --dither', 'Enable Floyd-Steinberg dithering for better color transitions')
     .option('-p, --preview', 'Show palette preview information')
     .helpOption('-h, --help', 'Show help information')
     .addHelpText('after', `
 Examples:
   $ node inky-processor.js photo.jpg inky_photo.jpg
-  $ node inky-processor.js --dither --quality 90 landscape.jpg display_ready.jpg
-  $ node inky-processor.js --preview --dither image.jpg result.jpg
+  $ node inky-processor.js --quality 90 landscape.jpg display_ready.jpg
+  $ node inky-processor.js --preview image.jpg result.jpg
 
 This script prepares images for the Inky Impression 7.3" e-ink display by:
 - Resizing to 800x480 pixels (maintaining aspect ratio with letterboxing)
