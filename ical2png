@@ -1,0 +1,335 @@
+#!/Usr/bin/perl
+use strict;
+use warnings;
+use HTTP::Tiny;
+use iCal::Parser;
+use GD;
+use DateTime;
+use DateTime::Format::ISO8601;
+use File::Temp;
+use Getopt::Long;
+
+# E-ink display colors (7-color palette)
+my %COLORS = (
+    'white'  => [255, 255, 255],
+    'black'  => [0, 0, 0],
+    'red'    => [255, 0, 0],
+    'green'  => [0, 255, 0],
+    'blue'   => [0, 0, 255],
+    'yellow' => [255, 255, 0],
+    'orange' => [255, 165, 0],
+);
+
+# Configuration
+my $width = 800;
+my $height = 480;
+my $view_mode = 'week';  # 'week' or 'month'
+my $output_file = 'calendar.png';
+my @calendar_urls = ();
+my $font_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
+my $help = 0;
+
+GetOptions(
+    'width=i'     => \$width,
+    'height=i'    => \$height,
+    'view=s'      => \$view_mode,
+    'output=s'    => \$output_file,
+    'calendar=s@' => \@calendar_urls,
+    'font=s'      => \$font_path,
+    'help'        => \$help,
+) or die "Error in command line arguments\n";
+
+if ($help || @calendar_urls == 0) {
+    print_usage();
+    exit;
+}
+
+sub print_usage {
+    print <<EOF;
+Usage: $0 [options]
+Options:
+    --calendar URL    Calendar URL (can be specified multiple times)
+    --view MODE       View mode: 'week' or 'month' (default: week)
+    --output FILE     Output PNG file (default: calendar.png)
+    --width INT       Image width (default: 800)
+    --height INT      Image height (default: 480)
+    --font PATH       TrueType font path (default: DejaVu Sans)
+    --help            Show this help
+
+Example:
+    $0 --calendar "https://calendar.google.com/calendar/ical/your_calendar/basic.ics" --view week
+EOF
+}
+
+# Fetch calendar data
+sub fetch_calendar_data {
+    my @all_events = ();
+    my $http = HTTP::Tiny->new(timeout => 30);
+    
+    for my $url (@calendar_urls) {
+        print "Fetching calendar: $url\n";
+        my $response = $http->get($url);
+        
+        if (!$response->{success}) {
+            warn "Failed to fetch $url: $response->{status} $response->{reason}\n";
+            next;
+        }
+        
+        # Save to temporary file for iCal::Parser
+        my $temp = File::Temp->new(SUFFIX => '.ics');
+        print $temp $response->{content};
+        close $temp;
+        
+        # Parse iCal data
+        my $parser = iCal::Parser->new();
+        my $hash = $parser->parse($temp->filename);
+        
+        # Extract events
+        for my $year (keys %{$hash->{events}}) {
+            for my $month (keys %{$hash->{events}{$year}}) {
+                for my $day (keys %{$hash->{events}{$year}{$month}}) {
+                    for my $uid (keys %{$hash->{events}{$year}{$month}{$day}}) {
+                        my $event = $hash->{events}{$year}{$month}{$day}{$uid};
+                        push @all_events, $event;
+                    }
+                }
+            }
+        }
+    }
+    
+    return @all_events;
+}
+
+# Filter events for the current period
+sub filter_events_for_period {
+    my ($events_ref, $start_date, $end_date) = @_;
+    my @filtered_events = ();
+    
+    for my $event (@$events_ref) {
+        next unless $event->{DTSTART};
+        
+        my $event_start;
+        eval {
+            if ($event->{DTSTART} =~ /^\d{8}T\d{6}Z?$/) {
+                # Parse YYYYMMDDTHHMMSS format
+                my $dt_str = $event->{DTSTART};
+                $dt_str =~ s/Z$//;  # Remove Z if present
+                if ($dt_str =~ /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/) {
+                    $event_start = DateTime->new(
+                        year => $1, month => $2, day => $3,
+                        hour => $4, minute => $5, second => $6
+                    );
+                }
+            } else {
+                # Try ISO8601 format
+                $event_start = DateTime::Format::ISO8601->parse_datetime($event->{DTSTART});
+            }
+        };
+        
+        next unless $event_start;
+        
+        if ($event_start >= $start_date && $event_start <= $end_date) {
+            push @filtered_events, {
+                summary => $event->{SUMMARY} || 'Untitled Event',
+                start => $event_start,
+                description => $event->{DESCRIPTION} || '',
+            };
+        }
+    }
+    
+    return sort { $a->{start} cmp $b->{start} } @filtered_events;
+}
+
+# Create image and allocate colors
+sub create_image {
+    my $img = GD::Image->new($width, $height);
+    
+    # Allocate colors for e-ink display
+    my %allocated_colors = ();
+    for my $color_name (keys %COLORS) {
+        my ($r, $g, $b) = @{$COLORS{$color_name}};
+        $allocated_colors{$color_name} = $img->colorAllocate($r, $g, $b);
+    }
+    
+    # Set background to white
+    $img->fill(0, 0, $allocated_colors{white});
+    
+    return ($img, \%allocated_colors);
+}
+
+# Render week view
+sub render_week_view {
+    my ($img, $colors, $events_ref) = @_;
+    my $now = DateTime->now();
+    my $start_of_week = $now->clone->subtract(days => $now->day_of_week % 7);
+    $start_of_week->set(hour => 0, minute => 0, second => 0);
+    my $end_of_week = $start_of_week->clone->add(days => 6, hours => 23, minutes => 59);
+    
+    my @week_events = filter_events_for_period($events_ref, $start_of_week, $end_of_week);
+    
+    # Draw title
+    my $title = $start_of_week->strftime("Week of %B %d, %Y");
+    $img->stringFT($colors->{black}, $font_path, 16, 0, 10, 30, $title);
+    
+    # Draw day headers
+    my $day_width = ($width - 20) / 7;
+    my $header_y = 50;
+    
+    for my $day_offset (0..6) {
+        my $day = $start_of_week->clone->add(days => $day_offset);
+        my $day_name = $day->strftime("%a %d");
+        my $x = 10 + ($day_offset * $day_width);
+        
+        # Draw day header background
+        $img->filledRectangle($x, $header_y, $x + $day_width - 2, $header_y + 25, $colors->{blue});
+        $img->stringFT($colors->{white}, $font_path, 12, 0, $x + 5, $header_y + 18, $day_name);
+    }
+    
+    # Draw events
+    my $event_y = $header_y + 35;
+    my $event_height = 20;
+    my $max_events_per_day = int(($height - $event_y - 10) / $event_height);
+    
+    my %events_by_day = ();
+    for my $event (@week_events) {
+        my $day_key = $event->{start}->ymd;
+        push @{$events_by_day{$day_key}}, $event;
+    }
+    
+    for my $day_offset (0..6) {
+        my $day = $start_of_week->clone->add(days => $day_offset);
+        my $day_key = $day->ymd;
+        my $x = 10 + ($day_offset * $day_width);
+        
+        my $events_today = $events_by_day{$day_key} || [];
+        my $event_count = 0;
+        
+        for my $event (@$events_today) {
+            last if $event_count >= $max_events_per_day;
+            
+            my $y = $event_y + ($event_count * $event_height);
+            my $time_str = $event->{start}->strftime("%H:%M");
+            my $summary = substr($event->{summary}, 0, 20);  # Truncate long titles
+            
+            # Draw event box
+            $img->filledRectangle($x, $y, $x + $day_width - 2, $y + $event_height - 2, $colors->{yellow});
+            $img->rectangle($x, $y, $x + $day_width - 2, $y + $event_height - 2, $colors->{black});
+            
+            # Draw event text
+            $img->stringFT($colors->{black}, $font_path, 8, 0, $x + 2, $y + 10, $time_str);
+            $img->stringFT($colors->{black}, $font_path, 8, 0, $x + 2, $y + 18, $summary);
+            
+            $event_count++;
+        }
+        
+        # Show "+N more" if there are more events
+        if (@$events_today > $max_events_per_day) {
+            my $more_count = @$events_today - $max_events_per_day;
+            my $y = $event_y + ($max_events_per_day * $event_height);
+            $img->stringFT($colors->{red}, $font_path, 8, 0, $x + 2, $y + 10, "+$more_count more");
+        }
+    }
+}
+
+# Render month view
+sub render_month_view {
+    my ($img, $colors, $events_ref) = @_;
+    my $now = DateTime->now();
+    my $start_of_month = DateTime->new(year => $now->year, month => $now->month, day => 1);
+    my $end_of_month = $start_of_month->clone->add(months => 1)->subtract(days => 1);
+    
+    my @month_events = filter_events_for_period($events_ref, $start_of_month, $end_of_month);
+    
+    # Draw title
+    my $title = $start_of_month->strftime("%B %Y");
+    $img->stringFT($colors->{black}, $font_path, 18, 0, 10, 30, $title);
+    
+    # Calendar grid
+    my $grid_start_y = 50;
+    my $cell_width = ($width - 20) / 7;
+    my $cell_height = ($height - $grid_start_y - 10) / 6;
+    
+    # Draw day headers
+    my @day_names = qw(Sun Mon Tue Wed Thu Fri Sat);
+    for my $i (0..6) {
+        my $x = 10 + ($i * $cell_width);
+        $img->stringFT($colors->{black}, $font_path, 12, 0, $x + 5, $grid_start_y + 20, $day_names[$i]);
+    }
+    
+    # Calculate first day of month position
+    my $first_day_dow = $start_of_month->day_of_week % 7;  # 0=Sunday
+    
+    # Draw calendar grid and events
+    my %events_by_day = ();
+    for my $event (@month_events) {
+        my $day_key = $event->{start}->day;
+        push @{$events_by_day{$day_key}}, $event;
+    }
+    
+    my $days_in_month = $end_of_month->day;
+    
+    for my $day (1..$days_in_month) {
+        my $position = $first_day_dow + $day - 1;
+        my $row = int($position / 7);
+        my $col = $position % 7;
+        
+        my $x = 10 + ($col * $cell_width);
+        my $y = $grid_start_y + 30 + ($row * $cell_height);
+        
+        # Draw cell border
+        $img->rectangle($x, $y, $x + $cell_width, $y + $cell_height, $colors->{black});
+        
+        # Draw day number
+        $img->stringFT($colors->{black}, $font_path, 10, 0, $x + 3, $y + 15, $day);
+        
+        # Draw event indicators
+        my $events_today = $events_by_day{$day} || [];
+        my $indicator_y = $y + 20;
+        my $max_indicators = int(($cell_height - 25) / 8);
+        
+        for my $i (0..$#{$events_today}) {
+            last if $i >= $max_indicators;
+            my $event = $events_today->[$i];
+            my $dot_color = ($i % 2 == 0) ? $colors->{red} : $colors->{green};
+            
+            # Draw small event indicator
+            $img->filledRectangle($x + 3, $indicator_y + ($i * 8), $x + 8, $indicator_y + ($i * 8) + 3, $dot_color);
+            
+            # Truncate and draw event title
+            my $short_title = substr($event->{summary}, 0, 8);
+            $img->stringFT($colors->{black}, $font_path, 6, 0, $x + 12, $indicator_y + ($i * 8) + 3, $short_title);
+        }
+        
+        # Show count if more events
+        if (@$events_today > $max_indicators) {
+            my $more_count = @$events_today - $max_indicators;
+            $img->stringFT($colors->{orange}, $font_path, 6, 0, $x + 3, $y + $cell_height - 5, "+$more_count");
+        }
+    }
+}
+
+# Main execution
+print "Fetching calendar data...\n";
+my @events = fetch_calendar_data();
+print "Found " . scalar(@events) . " events\n";
+
+print "Creating image...\n";
+my ($img, $colors) = create_image();
+
+if ($view_mode eq 'week') {
+    print "Rendering week view...\n";
+    render_week_view($img, $colors, \@events);
+} elsif ($view_mode eq 'month') {
+    print "Rendering month view...\n";
+    render_month_view($img, $colors, \@events);
+} else {
+    die "Invalid view mode: $view_mode (use 'week' or 'month')\n";
+}
+
+print "Saving to $output_file...\n";
+open my $fh, '>', $output_file or die "Cannot open $output_file: $!";
+binmode $fh;
+print $fh $img->png;
+close $fh;
+
+print "Calendar rendered successfully!\n";
