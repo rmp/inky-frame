@@ -469,7 +469,7 @@ function determineClipLen(ctx, maxWidth, str) {
 /**
  * Render week view
  */
-function renderWeekView(ctx, width, height, events, fontFamily) {
+function renderWeekView(ctx, width, height, events, fontFamily, darkMode) {
     const now         = DateTime.now();
     const startOfWeek = now.startOf('week');
     const endOfWeek   = startOfWeek.plus({ days: 6 }).endOf('day');
@@ -497,7 +497,7 @@ function renderWeekView(ctx, width, height, events, fontFamily) {
         ctx.fillRect(x, headerY, dayWidth - 2, 25);
         
         // Draw day header text
-        ctx.fillStyle = COLORS.white;
+        ctx.fillStyle = darkMode ? COLORS.black : COLORS.white;
         ctx.font = `12px ${fontFamily}`;
         ctx.fillText(dayName, x + 5, headerY + 18);
     }
@@ -539,9 +539,9 @@ function renderWeekView(ctx, width, height, events, fontFamily) {
             ctx.strokeStyle = COLORS.black;
             ctx.lineWidth = 1;
             ctx.strokeRect(x, y, dayWidth - 2, eventHeight - 2);
-            
+
             // Draw event text
-            ctx.fillStyle = COLORS.black;
+            ctx.fillStyle = darkMode ? COLORS.white : COLORS.black;
             ctx.font = `10px ${fontFamily}`;
             ctx.fillText(timeStr, x + 2, y + 10);
 
@@ -565,7 +565,7 @@ function renderWeekView(ctx, width, height, events, fontFamily) {
 /**
  * Render month view
  */
-function renderMonthView(ctx, width, height, events, fontFamily) {
+function renderMonthView(ctx, width, height, events, fontFamily, darkMode) {
     const now          = DateTime.now();
     const startOfMonth = now.startOf('month');
     const endOfMonth   = now.endOf('month');
@@ -677,10 +677,10 @@ async function renderCalendar(options) {
     
     if (options.viewMode === 'week') {
         console.log('Rendering week view...');
-        renderWeekView(ctx, options.width, options.height, events, fontFamily);
+        renderWeekView(ctx, options.width, options.height, events, fontFamily, options.dark);
     } else if (options.viewMode === 'month') {
         console.log('Rendering month view...');
-        renderMonthView(ctx, options.width, options.height, events, fontFamily);
+        renderMonthView(ctx, options.width, options.height, events, fontFamily, options.dark);
     } else {
         throw new Error(`Invalid view mode: ${options.viewMode} (use 'week' or 'month')`);
     }
@@ -780,7 +780,8 @@ function setupCLI() {
                 includePrimary: options.includePrimary,
                 serviceAccountPath: options.serviceAccount,
                 fontPath: options.font,
-                maxResults: options.maxResults
+                maxResults: options.maxResults,
+		dark: options.dark
             };
             
             try {
