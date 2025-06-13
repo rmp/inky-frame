@@ -451,15 +451,31 @@ function setupFont(ctx, fontPath) {
     return 'Arial, sans-serif';
 }
 
+function determineClipLen(ctx, maxWidth, str) {
+    let i=str.length;
+
+    while(i>0) {
+	const measureText =  ctx.measureText(str.substring(0, i));
+
+	if(measureText.width <= maxWidth) {
+	    return str.substring(0,i);
+	}
+	i -= 1;
+    }
+
+    return str;
+}
+
 /**
  * Render week view
  */
 function renderWeekView(ctx, width, height, events, fontFamily) {
-    const now = DateTime.now();
+    const now         = DateTime.now();
     const startOfWeek = now.startOf('week');
-    const endOfWeek = startOfWeek.plus({ days: 6 }).endOf('day');
-    
-    const weekEvents = filterEventsForPeriod(events, startOfWeek.toJSDate(), endOfWeek.toJSDate());
+    const endOfWeek   = startOfWeek.plus({ days: 6 }).endOf('day');
+    const weekEvents  = filterEventsForPeriod(events, startOfWeek.toJSDate(), endOfWeek.toJSDate());
+
+    //console.log(weekEvents);
     
     // Draw title
     ctx.fillStyle = COLORS.black;
@@ -502,9 +518,9 @@ function renderWeekView(ctx, width, height, events, fontFamily) {
     });
     
     for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
-        const day = startOfWeek.plus({ days: dayOffset });
+        const day    = startOfWeek.plus({ days: dayOffset });
         const dayKey = day.toISODate();
-        const x = 10 + (dayOffset * dayWidth);
+        const x      = 10 + (dayOffset * dayWidth);
         
         const eventsToday = eventsByDay[dayKey] || [];
         let eventCount = 0;
@@ -514,8 +530,8 @@ function renderWeekView(ctx, width, height, events, fontFamily) {
             
             const y = eventY + (eventCount * eventHeight);
             const timeStr = event.start.toFormat('HH:mm');
-            const summary = event.summary.substring(0, 20); // Truncate long titles
-            
+            //const summary = event.summary;//.substring(0, 16); // Truncate long titles
+	    
             // Draw event box
             ctx.fillStyle = COLORS.yellow;
             ctx.fillRect(x, y, dayWidth - 2, eventHeight - 2);
@@ -528,6 +544,8 @@ function renderWeekView(ctx, width, height, events, fontFamily) {
             ctx.fillStyle = COLORS.black;
             ctx.font = `10px ${fontFamily}`;
             ctx.fillText(timeStr, x + 2, y + 10);
+
+	    const summary = determineClipLen(ctx, dayWidth-4, event.summary);
             ctx.fillText(summary, x + 2, y + 20);
             
             eventCount++;
@@ -538,7 +556,7 @@ function renderWeekView(ctx, width, height, events, fontFamily) {
             const moreCount = eventsToday.length - maxEventsPerDay;
             const y = eventY + (maxEventsPerDay * eventHeight);
             ctx.fillStyle = COLORS.red;
-            ctx.font = `8px ${fontFamily}`;
+            ctx.font = `10px ${fontFamily}`;
             ctx.fillText(`+${moreCount} more`, x + 2, y + 10);
         }
     }
@@ -548,21 +566,20 @@ function renderWeekView(ctx, width, height, events, fontFamily) {
  * Render month view
  */
 function renderMonthView(ctx, width, height, events, fontFamily) {
-    const now = DateTime.now();
+    const now          = DateTime.now();
     const startOfMonth = now.startOf('month');
-    const endOfMonth = now.endOf('month');
-    
-    const monthEvents = filterEventsForPeriod(events, startOfMonth.toJSDate(), endOfMonth.toJSDate());
+    const endOfMonth   = now.endOf('month');
+    const monthEvents  = filterEventsForPeriod(events, startOfMonth.toJSDate(), endOfMonth.toJSDate());
     
     // Draw title
     ctx.fillStyle = COLORS.black;
-    ctx.font = `18px ${fontFamily}`;
-    const title = startOfMonth.toFormat('MMMM yyyy');
+    ctx.font      = `18px ${fontFamily}`;
+    const title   = startOfMonth.toFormat('MMMM yyyy');
     ctx.fillText(title, 10, 30);
     
     // Calendar grid
     const gridStartY = 50;
-    const cellWidth = (width - 20) / 7;
+    const cellWidth  = (width - 20) / 7;
     const cellHeight = (height - gridStartY - 10) / 6;
     
     // Draw day headers
@@ -600,6 +617,10 @@ function renderMonthView(ctx, width, height, events, fontFamily) {
         // Draw cell border
         ctx.strokeStyle = COLORS.black;
         ctx.lineWidth = 1;
+	if(day == (new Date()).getDate()) {
+	    ctx.strokeStyle = COLORS.red;
+            ctx.lineWidth = 2;
+	}
         ctx.strokeRect(x, y, cellWidth, cellHeight);
         
         // Draw day number
@@ -621,9 +642,9 @@ function renderMonthView(ctx, width, height, events, fontFamily) {
             ctx.fillRect(x + 3, indicatorY + (i * 8), 5, 3);
             
             // Truncate and draw event title
-            const shortTitle = event.summary.substring(0, 8);
+            ctx.font = `8px ${fontFamily}`;
             ctx.fillStyle = COLORS.black;
-            ctx.font = `6px ${fontFamily}`;
+            const shortTitle = determineClipLen(ctx, cellWidth-10, event.summary);
             ctx.fillText(shortTitle, x + 12, indicatorY + (i * 8) + 3);
         }
         
