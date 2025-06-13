@@ -6,13 +6,13 @@
  * Enhanced with better private calendar support and primary calendar detection
  */
 
-const fs = require('fs').promises;
-const { createCanvas, loadImage, registerFont } = require('canvas');
+const fs   = require('fs').promises;
 const ical = require('ical');
-const { DateTime } = require('luxon');
-const { Command } = require('commander');
 const path = require('path');
-const { JWT } = require('google-auth-library');
+const { createCanvas, loadImage, registerFont } = require('canvas');
+const { DateTime } = require('luxon');
+const { Command }  = require('commander');
+const { JWT }      = require('google-auth-library');
 
 // E-ink display colors (7-color palette)
 const COLORS = {
@@ -617,24 +617,29 @@ function renderMonthView(ctx, width, height, events, fontFamily) {
         // Draw cell border
         ctx.strokeStyle = COLORS.black;
         ctx.lineWidth = 1;
-	if(day == (new Date()).getDate()) {
-	    ctx.strokeStyle = COLORS.red;
-            ctx.lineWidth = 2;
-	}
         ctx.strokeRect(x, y, cellWidth, cellHeight);
-        
+
+	// highlight today
+	if(day == (new Date()).getDate()) {
+	    ctx.fillStyle = COLORS.red;
+            ctx.beginPath();
+            ctx.arc(x+10, y+10, 14, 0, Math.PI * 2, true);
+            ctx.closePath();
+	    ctx.fill();
+	}
+
         // Draw day number
-        ctx.fillStyle = COLORS.black;
-        ctx.font = `10px ${fontFamily}`;
+	ctx.fillStyle = COLORS.black;
+        ctx.font      = `10px ${fontFamily}`;
         ctx.fillText(day.toString(), x + 3, y + 15);
         
         // Draw event indicators
-        const eventsToday = eventsByDay[day] || [];
-        const indicatorY = y + 20;
+        const eventsToday   = eventsByDay[day] || [];
+        const indicatorY    = y + 20;
         const maxIndicators = Math.floor((cellHeight - 25) / 8);
         
         for (let i = 0; i < Math.min(eventsToday.length, maxIndicators); i++) {
-            const event = eventsToday[i];
+            const event    = eventsToday[i];
             const dotColor = (i % 2 === 0) ? COLORS.red : COLORS.green;
             
             // Draw small event indicator
@@ -703,6 +708,7 @@ function setupCLI() {
     program
         .option('--width <number>', 'Image width', (val) => parseInt(val), config.width)
         .option('--height <number>', 'Image height', (val) => parseInt(val), config.height)
+        .option('--dark', 'Dark mode')
         .option('--view <mode>', 'View mode: week or month', config.viewMode)
         .option('--output <file>', 'Output PNG file', config.outputFile)
         .option('--calendar <url>', 'Calendar URL (can be specified multiple times)', (url, urls) => {
@@ -724,7 +730,13 @@ function setupCLI() {
                 showExamples();
                 return;
             }
-            
+
+            if (options.dark) {
+		// dark-mode
+		COLORS.black = '#FFFFFF';
+		COLORS.white = '#000000';
+	    }
+
             if (options.listCalendars) {
                 if (!options.serviceAccount) {
                     console.error('Error: Service account credentials required to list calendars');
