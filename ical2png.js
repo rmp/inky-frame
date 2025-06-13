@@ -3,6 +3,7 @@
 /**
  * Node.js E-ink Calendar Renderer
  * Fetches Google Calendar data and renders it as a low-color PNG for e-ink displays
+ * Enhanced with better private calendar support and primary calendar detection
  */
 
 const fs = require('fs').promises;
@@ -33,7 +34,10 @@ const config = {
     calendarUrls: [],
     fontPath: './DejaVuSans.ttf',
     serviceAccountPath: null,
-    calendarIds: []
+    calendarIds: [],
+    includePrimary: false,
+    listCalendars: false,
+    maxResults: 2500
 };
 
 /**
@@ -46,7 +50,10 @@ async function createGoogleAuthClient(serviceAccountPath) {
         const jwtClient = new JWT({
             email: serviceAccount.client_email,
             key: serviceAccount.private_key,
-            scopes: ['https://www.googleapis.com/auth/calendar.readonly']
+            scopes: [
+                'https://www.googleapis.com/auth/calendar.readonly',
+                'https://www.googleapis.com/auth/calendar.calendars.readonly'
+            ]
         });
         
         await jwtClient.authorize();
@@ -57,21 +64,13 @@ async function createGoogleAuthClient(serviceAccountPath) {
 }
 
 /**
- * Fetch Google Calendar events using Calendar API
+ * List all accessible calendars for the authenticated user
  */
-async function fetchGoogleCalendarEvents(calendarId, authClient, timeMin, timeMax) {
+async function listGoogleCalendars(authClient) {
     try {
         const accessToken = await authClient.getAccessToken();
         
-        const params = new URLSearchParams({
-            timeMin: timeMin.toISO(),
-            timeMax: timeMax.toISO(),
-            singleEvents: 'true',
-            orderBy: 'startTime',
-            maxResults: '2500'
-        });
-        
-        const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`;
+        const url = 'https://www.googleapis.com/calendar/v3/users/me/calendarList';
         
         const response = await fetch(url, {
             method: 'GET',
@@ -88,6 +87,91 @@ async function fetchGoogleCalendarEvents(calendarId, authClient, timeMin, timeMa
 
         const data = await response.json();
         
+        return data.items.map(calendar => ({
+            id: calendar.id,
+            summary: calendar.summary,
+            description: calendar.description || '',
+            primary: calendar.primary || false,
+            accessRole: calendar.accessRole,
+            selected: calendar.selected !== false, // Default to true if not specified
+            backgroundColor: calendar.backgroundColor,
+            foregroundColor: calendar.foregroundColor
+        }));
+    } catch (error) {
+        if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+            throw new Error('Request timeout while listing calendars');
+        }
+        throw error;
+    }
+}
+
+/**
+ * Get primary calendar ID for the authenticated user
+ */
+async function getPrimaryCalendarId(authClient) {
+    try {
+        const calendars = await listGoogleCalendars(authClient);
+        const primaryCalendar = calendars.find(cal => cal.primary);
+        
+        if (primaryCalendar) {
+            console.log(`Primary calendar found: ${primaryCalendar.summary} (${primaryCalendar.id})`);
+            return primaryCalendar.id;
+        }
+        
+        // Fallback to 'primary' keyword if no primary calendar found
+        console.log('No primary calendar found, using "primary" keyword');
+        return 'primary';
+    } catch (error) {
+        console.warn(`Could not determine primary calendar: ${error.message}`);
+        return 'primary'; // Fallback
+    }
+}
+
+/**
+ * Fetch Google Calendar events using Calendar API
+ */
+async function fetchGoogleCalendarEvents(calendarId, authClient, timeMin, timeMax, maxResults = 2500) {
+    try {
+        const accessToken = await authClient.getAccessToken();
+        
+        const params = new URLSearchParams({
+            timeMin: timeMin.toISO(),
+            timeMax: timeMax.toISO(),
+            singleEvents: 'true',
+            orderBy: 'startTime',
+            maxResults: maxResults.toString()
+        });
+        
+        // Handle special case for 'primary' keyword and email addresses
+        let encodedCalendarId;
+        if (calendarId === 'primary') {
+            encodedCalendarId = 'primary';
+        } else {
+            // Properly encode calendar ID (especially important for email addresses)
+            encodedCalendarId = encodeURIComponent(calendarId);
+        }
+        
+        const url = `https://www.googleapis.com/calendar/v3/calendars/${encodedCalendarId}/events?${params}`;
+        
+        console.log(`  Requesting URL: ${url.substring(0, 100)}...`); // Log first 100 chars for debugging
+        
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${accessToken.token}`,
+                'User-Agent': 'Node.js Calendar Renderer/1.0'
+            },
+            signal: AbortSignal.timeout(30000)
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`  API Error Details: ${errorText}`);
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        
         // Convert Google Calendar events to our format
         return data.items.map(event => ({
             uid: event.id,
@@ -95,12 +179,21 @@ async function fetchGoogleCalendarEvents(calendarId, authClient, timeMin, timeMa
             description: event.description || '',
             start: event.start.dateTime ? new Date(event.start.dateTime) : new Date(event.start.date),
             end: event.end.dateTime ? new Date(event.end.dateTime) : new Date(event.end.date),
-            location: event.location || ''
-        }));
+            location: event.location || '',
+            calendarId: calendarId,
+            status: event.status || 'confirmed',
+            transparency: event.transparency || 'opaque'
+        })).filter(event => event.status === 'confirmed'); // Only include confirmed events
     } catch (error) {
         if (error.name === 'AbortError' || error.name === 'TimeoutError') {
             throw new Error('Request timeout');
         }
+        
+        // Add more context to the error
+        if (error.message.includes('Failed to parse URL')) {
+            throw new Error(`URL parsing error for calendar ID '${calendarId}': ${error.message}. This might be a calendar ID formatting issue.`);
+        }
+        
         throw error;
     }
 }
@@ -139,7 +232,7 @@ async function fetchCalendarData(options) {
     const allEvents = [];
     
     // Handle Google Calendar IDs with service account authentication
-    if (options.calendarIds && options.calendarIds.length > 0) {
+    if ((options.calendarIds && options.calendarIds.length > 0) || options.includePrimary) {
         if (!options.serviceAccountPath) {
             throw new Error('Service account credentials required for Google Calendar API access');
         }
@@ -161,13 +254,55 @@ async function fetchCalendarData(options) {
                 timeMax = timeMin.plus({ days: 6 }).endOf('day');
             }
             
-            for (const calendarId of options.calendarIds) {
+            const calendarIdsToFetch = [...(options.calendarIds || [])];
+            
+            // Add primary calendar if requested
+            if (options.includePrimary) {
+                try {
+                    const primaryId = await getPrimaryCalendarId(authClient);
+                    console.log(`Adding primary calendar: ${primaryId}`);
+                    
+                    // Avoid duplicates if primary calendar was already specified
+                    if (!calendarIdsToFetch.includes(primaryId)) {
+                        calendarIdsToFetch.unshift(primaryId); // Add at beginning
+                    } else {
+                        console.log('Primary calendar already in list, skipping duplicate');
+                    }
+                } catch (error) {
+                    console.warn(`Could not get primary calendar: ${error.message}`);
+                }
+            }
+            
+            for (const calendarId of calendarIdsToFetch) {
                 try {
                     console.log(`Fetching Google Calendar: ${calendarId}`);
-                    const events = await fetchGoogleCalendarEvents(calendarId, authClient, timeMin, timeMax);
+                    
+                    // Validate calendar ID format
+                    if (!calendarId || calendarId.trim() === '') {
+                        console.warn('Skipping empty calendar ID');
+                        continue;
+                    }
+                    
+                    const events = await fetchGoogleCalendarEvents(
+                        calendarId, 
+                        authClient, 
+                        timeMin, 
+                        timeMax, 
+                        options.maxResults
+                    );
+                    console.log(`  Found ${events.length} events`);
                     allEvents.push(...events);
                 } catch (error) {
                     console.warn(`Failed to fetch Google Calendar ${calendarId}: ${error.message}`);
+                    
+                    // Provide more specific guidance for common errors
+                    if (error.message.includes('404') || error.message.includes('Not Found')) {
+                        console.warn(`  Calendar '${calendarId}' may not exist or service account lacks access`);
+                        console.warn(`  Try running --list-calendars to see available calendars`);
+                    } else if (error.message.includes('403') || error.message.includes('Forbidden')) {
+                        console.warn(`  Service account lacks permission to access '${calendarId}'`);
+                        console.warn(`  Make sure the calendar is shared with the service account email`);
+                    }
                 }
             }
         } catch (error) {
@@ -196,7 +331,8 @@ async function fetchCalendarData(options) {
                             description: event.description || '',
                             start: event.start,
                             end: event.end,
-                            location: event.location || ''
+                            location: event.location || '',
+                            calendarId: url
                         });
                     }
                 }
@@ -207,6 +343,56 @@ async function fetchCalendarData(options) {
     }
     
     return allEvents;
+}
+
+/**
+ * List available calendars for debugging/setup
+ */
+async function listCalendars(options) {
+    if (!options.serviceAccountPath) {
+        throw new Error('Service account credentials required for listing Google Calendars');
+    }
+    
+    try {
+        console.log('Creating Google Auth client...');
+        const authClient = await createGoogleAuthClient(options.serviceAccountPath);
+        
+        console.log('Fetching calendar list...\n');
+        const calendars = await listGoogleCalendars(authClient);
+        
+        console.log('Available Calendars:');
+        console.log('===================');
+        
+        calendars.forEach((calendar, index) => {
+            console.log(`${index + 1}. ${calendar.summary}`);
+            console.log(`   ID: ${calendar.id}`);
+            console.log(`   Access: ${calendar.accessRole}`);
+            console.log(`   Primary: ${calendar.primary ? 'Yes' : 'No'}`);
+            console.log(`   Selected: ${calendar.selected ? 'Yes' : 'No'}`);
+            if (calendar.description) {
+                console.log(`   Description: ${calendar.description}`);
+            }
+            console.log('');
+        });
+        
+        const primaryCalendar = calendars.find(cal => cal.primary);
+        if (primaryCalendar) {
+            console.log(`Primary Calendar: ${primaryCalendar.summary} (${primaryCalendar.id})`);
+        }
+        
+        console.log(`\nTo use these calendars, run:`);
+        console.log(`node ical2png.js --google-calendar "CALENDAR_ID" --service-account "${options.serviceAccountPath}"`);
+        console.log(`\nFor primary calendar only:`);
+        console.log(`node ical2png.js --include-primary --service-account "${options.serviceAccountPath}"`);
+        console.log(`\nExample with actual calendar ID:`);
+        if (calendars.length > 0) {
+            const exampleCalendar = calendars[0];
+            console.log(`node ical2png.js --google-calendar "${exampleCalendar.id}" --service-account "${options.serviceAccountPath}"`);
+        }
+    } catch (error) {
+        console.error(`Failed to list calendars: ${error.message}`);
+        throw error;
+    }
 }
 
 /**
@@ -227,7 +413,8 @@ function filterEventsForPeriod(events, startDate, endDate) {
             summary: event.summary,
             start: DateTime.fromJSDate(event.start),
             description: event.description,
-            location: event.location
+            location: event.location,
+            calendarId: event.calendarId
         }))
         .sort((a, b) => a.start.toMillis() - b.start.toMillis());
 }
@@ -301,7 +488,7 @@ function renderWeekView(ctx, width, height, events, fontFamily) {
     
     // Draw events
     const eventY = headerY + 35;
-    const eventHeight = 20;
+    const eventHeight = 30;
     const maxEventsPerDay = Math.floor((height - eventY - 10) / eventHeight);
     
     // Group events by day
@@ -339,9 +526,9 @@ function renderWeekView(ctx, width, height, events, fontFamily) {
             
             // Draw event text
             ctx.fillStyle = COLORS.black;
-            ctx.font = `8px ${fontFamily}`;
+            ctx.font = `10px ${fontFamily}`;
             ctx.fillText(timeStr, x + 2, y + 10);
-            ctx.fillText(summary, x + 2, y + 18);
+            ctx.fillText(summary, x + 2, y + 20);
             
             eventCount++;
         }
@@ -490,7 +677,7 @@ function setupCLI() {
     program
         .name('calendar-renderer')
         .description('Fetch calendars and render as PNG for e-ink displays')
-        .version('1.0.0');
+        .version('1.1.0');
     
     program
         .option('--width <number>', 'Image width', (val) => parseInt(val), config.width)
@@ -505,8 +692,11 @@ function setupCLI() {
             ids.push(id);
             return ids;
         }, [])
+        .option('--include-primary', 'Include the primary Google Calendar')
         .option('--service-account <path>', 'Path to Google service account JSON file')
         .option('--font <path>', 'TrueType font path', config.fontPath)
+        .option('--max-results <number>', 'Maximum number of events to fetch per calendar', (val) => parseInt(val), config.maxResults)
+        .option('--list-calendars', 'List available Google Calendars and exit')
         .option('--help-examples', 'Show usage examples')
         .action(async (options) => {
             if (options.helpExamples) {
@@ -514,14 +704,35 @@ function setupCLI() {
                 return;
             }
             
-            if (options.calendar.length === 0 && options.googleCalendar.length === 0) {
-                console.error('Error: At least one calendar URL or Google Calendar ID must be specified');
-                console.log('Use --help for usage information');
+            if (options.listCalendars) {
+                if (!options.serviceAccount) {
+                    console.error('Error: Service account credentials required to list calendars');
+                    console.log('Use --service-account to specify the path to your service account JSON file');
+                    process.exit(1);
+                }
+                
+                const listOptions = {
+                    serviceAccountPath: options.serviceAccount
+                };
+                
+                try {
+                    await listCalendars(listOptions);
+                } catch (error) {
+                    console.error('Error:', error.message);
+                    process.exit(1);
+                }
+                return;
+            }
+            
+            if (!options.includePrimary && options.calendar.length === 0 && options.googleCalendar.length === 0) {
+                console.error('Error: At least one calendar source must be specified');
+                console.log('Options: --calendar, --google-calendar, or --include-primary');
+                console.log('Use --help for usage information or --list-calendars to see available calendars');
                 process.exit(1);
             }
             
-            if (options.googleCalendar.length > 0 && !options.serviceAccount) {
-                console.error('Error: Service account credentials required when using Google Calendar IDs');
+            if ((options.googleCalendar.length > 0 || options.includePrimary) && !options.serviceAccount) {
+                console.error('Error: Service account credentials required when using Google Calendar features');
                 console.log('Use --service-account to specify the path to your service account JSON file');
                 process.exit(1);
             }
@@ -533,8 +744,10 @@ function setupCLI() {
                 outputFile: options.output,
                 calendarUrls: options.calendar,
                 calendarIds: options.googleCalendar,
+                includePrimary: options.includePrimary,
                 serviceAccountPath: options.serviceAccount,
-                fontPath: options.font
+                fontPath: options.font,
+                maxResults: options.maxResults
             };
             
             try {
@@ -544,7 +757,9 @@ function setupCLI() {
                 process.exit(1);
             }
         });
-    
+
+    program.parse();
+
     return program;
 }
 
@@ -553,64 +768,87 @@ function setupCLI() {
  */
 function showExamples() {
     console.log(`
-Usage Examples:
+Enhanced Usage Examples for Personal Private Google Calendars:
 
-# Google Calendar with service account (recommended for private calendars)
-node calendar-renderer.js \\
-    --google-calendar "your-calendar-id@group.calendar.google.com" \\
+# PRIMARY CALENDAR (most common for personal use)
+node ical2png.js \\
+    --include-primary \\
     --service-account "/path/to/service-account.json" \\
     --view week
 
-# Multiple Google Calendars
-node calendar-renderer.js \\
-    --google-calendar "calendar1@group.calendar.google.com" \\
-    --google-calendar "calendar2@group.calendar.google.com" \\
+# List all available calendars first (recommended)
+node ical2png.js \\
+    --list-calendars \\
+    --service-account "/path/to/service-account.json"
+
+# Primary calendar + specific additional calendars
+node ical2png.js \\
+    --include-primary \\
+    --google-calendar "family@group.calendar.google.com" \\
     --service-account "/path/to/service-account.json" \\
     --view month
 
-# Mix Google Calendar API and iCal URLs
-node calendar-renderer.js \\
+# Multiple personal calendars by ID
+node ical2png.js \\
+    --google-calendar "your-email@gmail.com" \\
     --google-calendar "work@group.calendar.google.com" \\
-    --calendar "https://calendar.google.com/calendar/ical/personal/basic.ics" \\
     --service-account "/path/to/service-account.json" \\
     --view week
 
-# Traditional iCal URL (public calendars)
-node calendar-renderer.js \\
-    --calendar "https://calendar.google.com/calendar/ical/your_calendar/basic.ics" \\
+# Mix everything: primary + specific calendars + iCal
+node ical2png.js \\
+    --include-primary \\
+    --google-calendar "work@group.calendar.google.com" \\
+    --calendar "https://calendar.google.com/calendar/ical/public/basic.ics" \\
+    --service-account "/path/to/service-account.json" \\
     --view week
 
-# Multiple iCal calendars
-node calendar-renderer.js \\
-    --calendar "https://calendar.google.com/calendar/ical/calendar1/basic.ics" \\
-    --calendar "https://calendar.google.com/calendar/ical/calendar2/basic.ics" \\
-    --view week --output weekly.png
-
-# Custom dimensions and font
-node calendar-renderer.js \\
-    --google-calendar "your-calendar@group.calendar.google.com" \\
+# High-resolution output with custom limits
+node ical2png.js \\
+    --include-primary \\
     --service-account "/path/to/service-account.json" \\
-    --width 600 --height 400 \\
-    --font "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf" \\
-    --view month
+    --width 1200 --height 800 \\
+    --max-results 5000 \\
+    --view month --output large-calendar.png
 
-Setup Google Service Account:
-1. Go to Google Cloud Console (https://console.cloud.google.com/)
-2. Create a new project or select existing one
-3. Enable Google Calendar API
-4. Create service account credentials:
+SETUP FOR PERSONAL PRIVATE CALENDARS:
+
+1. Create Google Cloud Project:
+   - Go to https://console.cloud.google.com/
+   - Create new project or select existing one
+   - Enable Google Calendar API
+
+2. Create Service Account:
    - Go to "Credentials" → "Create Credentials" → "Service Account"
-   - Download the JSON key file
-5. Share your calendar with the service account email address:
-   - In Google Calendar, go to calendar settings
-   - Add the service account email (from JSON file) with "See all event details" permission
+   - Give it a descriptive name like "Calendar Display"
+   - Download the JSON key file (keep it secure!)
 
-Finding Calendar ID:
-- In Google Calendar, go to calendar settings
-- Scroll down to "Integrate calendar"
-- Copy the "Calendar ID" (usually ends with @group.calendar.google.com)
+3. Share Your Personal Calendar:
+   - Open Google Calendar (calendar.google.com)
+   - Click the gear icon → Settings
+   - In the left sidebar, click on your calendar name
+   - Scroll to "Share with specific people"
+   - Click "Add people" and enter the service account email
+     (found in the JSON file as "client_email")
+   - Set permission to "See all event details"
 
-Package.json dependencies needed:
+4. Find Your Calendar ID:
+   - Still in calendar settings, scroll to "Integrate calendar"
+   - Copy the "Calendar ID" (usually your-email@gmail.com for primary)
+   - Or use --list-calendars to see all available calendars
+
+QUICK START FOR PERSONAL USE:
+1. Follow setup steps 1-3 above
+2. Use --include-primary flag (easiest for personal calendars)
+3. Run: node ical2png.js --include-primary --service-account path/to/service.json
+
+TROUBLESHOOTING:
+- Use --list-calendars to verify your service account has access
+- Primary calendar ID is usually your Gmail address
+- Make sure service account email has "See all event details" permission
+- Check that Calendar API is enabled in Google Cloud Console
+
+Package.json dependencies (same as before):
 {
   "dependencies": {
     "canvas": "^2.11.2",
@@ -625,10 +863,4 @@ Install with: npm install canvas ical luxon commander google-auth-library
 `);
 }
 
-// Main execution
-if (require.main === module) {
-    const program = setupCLI();
-    program.parse();
-}
-
-module.exports = { renderCalendar, fetchCalendarData };
+setupCLI();
