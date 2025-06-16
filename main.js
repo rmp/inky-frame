@@ -1,16 +1,15 @@
 #!/usr/bin/env node
 
-//const fsnp = require('fs');
+const inky   = require('@aeroniemi/inky')
+const sharp  = require('sharp');
+const fs     = require('fs').promises;
+const path   = require('path');
 const { Readable } = require('stream');
-const inky = require('@aeroniemi/inky')
-const sharp = require('sharp');
-const fs = require('fs').promises;
-const path = require('path');
-const { program } = require('commander');
+const { program  } = require('commander');
 
 // Inky Impression 7.3" specifications
-const frame = new inky.Impression73()
-const TARGET_WIDTH = 800;
+const frame         = new inky.Impression73()
+const TARGET_WIDTH  = 800;
 const TARGET_HEIGHT = 480;
 
 // Optimal 7-color palette for Inky Impression (ACeP - Advanced Color ePaper)
@@ -41,13 +40,13 @@ function colorDistance(rgb1, rgb2) {
 
 // Find closest color in palette
 function findClosestColor(rgb, palette) {
-    let minDistance = Infinity;
+    let minDistance  = Infinity;
     let closestColor = palette[0];
     
     for (const paletteColor of palette) {
         const distance = colorDistance(rgb, paletteColor);
         if (distance < minDistance) {
-            minDistance = distance;
+            minDistance  = distance;
             closestColor = paletteColor;
         }
     }
@@ -61,12 +60,12 @@ function applyFloydSteinbergDithering(imageData, width, height, palette) {
     
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
-            const idx = (y * width + x) * 3;
-            
+
+            const idx      = (y * width + x) * 3;
             const oldPixel = [data[idx], data[idx + 1], data[idx + 2]];
             const newPixel = findClosestColor(oldPixel, palette);
             
-            data[idx] = newPixel[0];
+            data[idx]     = newPixel[0];
             data[idx + 1] = newPixel[1];
             data[idx + 2] = newPixel[2];
             
@@ -104,7 +103,7 @@ function quantizeToEinkPalette(imageData, width, height, palette) {
         const oldPixel = [data[i], data[i + 1], data[i + 2]];
         const newPixel = findClosestColor(oldPixel, palette);
         
-        data[i] = newPixel[0];
+        data[i]     = newPixel[0];
         data[i + 1] = newPixel[1];
         data[i + 2] = newPixel[2];
     }
@@ -115,7 +114,7 @@ function quantizeToEinkPalette(imageData, width, height, palette) {
 async function processImage(buf, options) {
     try {
         
-        const image = sharp(buf);
+        const image    = sharp(buf);
         const metadata = await image.metadata();
         console.log(metadata);
         console.log(`Original size: ${metadata.width}x${metadata.height}`);
@@ -136,9 +135,9 @@ async function processImage(buf, options) {
         // Create a white canvas with target dimensions
         const canvas = sharp({
             create: {
-                width: TARGET_WIDTH,
-                height: TARGET_HEIGHT,
-                channels: 3,
+                width:      TARGET_WIDTH,
+                height:     TARGET_HEIGHT,
+                channels:   3,
                 background: { r: 255, g: 255, b: 255 }
             }
         }).removeAlpha(); // removeAlpha required here - channels:3 isn't honoured!!
@@ -147,7 +146,7 @@ async function processImage(buf, options) {
         const resizedImageBuf = await image
               .resize(newWidth, newHeight, {
                   kernel: sharp.kernel.lanczos3,
-                  fit: 'inside'
+                  fit:    'inside'
               })
 	      .toBuffer();
 	console.log(`Resized. Compositing...`);
@@ -166,18 +165,20 @@ async function processImage(buf, options) {
 
         // Apply color mapping and optional dithering
         console.log('Applying Floyd-Steinberg dithering...');
-        processedImage = applyFloydSteinbergDithering(
-            await processedImage,
-            TARGET_WIDTH, 
-            TARGET_HEIGHT, 
-            EINK_PALETTE
-        );
+	if(options.dither) {
+            processedImage = applyFloydSteinbergDithering(
+		await processedImage,
+		TARGET_WIDTH, 
+		TARGET_HEIGHT, 
+		EINK_PALETTE
+            );
+	}
                 
         // Convert back to image and apply post-processing
         const finalImage = sharp(processedImage, {
             raw: {
-                width: TARGET_WIDTH,
-                height: TARGET_HEIGHT,
+                width:    TARGET_WIDTH,
+                height:   TARGET_HEIGHT,
                 channels: 3
             }
         });
@@ -213,6 +214,7 @@ program
     .version('1.0.0')
     .option('-q, --quality <number>', 'Output JPEG quality (1-100)', '85')
     .option('-p, --preview', 'Show palette preview information')
+    .option('-d, --dither', 'Apply dithering')
     .option('-i, --image <png>', 'Alternative image to display')
     .helpOption('-h, --help', 'Show help information')
     .addHelpText('after', `
@@ -242,7 +244,7 @@ if (isNaN(quality) || quality < 1 || quality > 100) {
 
 const loadfile = async (fn) => {
     let data;
-
+    
     if(fn) {
 	data = await fs.readFile(fn, null);
     } else {
@@ -258,7 +260,7 @@ loadfile(options.image)
 	// Process the image
 	processImage(x, {
 	    quality: quality,
-	    dither: options.dither || false,
+	    dither: options.dither   || false,
 	    preview: options.preview || false
 	}).then(() => {
 	    console.log('\nImage prepared for Inky Impression 7.3" display!');

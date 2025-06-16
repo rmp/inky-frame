@@ -479,8 +479,8 @@ function renderWeekView(ctx, width, height, events, fontFamily, darkMode) {
     
     // Draw title
     ctx.fillStyle = COLORS.black;
-    ctx.font = `16px ${fontFamily}`;
-    const title = startOfWeek.toFormat('\'Week of\' MMMM dd, yyyy');
+    ctx.font      = `16px ${fontFamily}`;
+    const title   = startOfWeek.toFormat('\'Week of\' MMMM dd, yyyy');
     ctx.fillText(title, 10, 30);
     
     // Draw day headers
@@ -488,23 +488,23 @@ function renderWeekView(ctx, width, height, events, fontFamily, darkMode) {
     const headerY = 50;
     
     for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
-        const day = startOfWeek.plus({ days: dayOffset });
+        const day     = startOfWeek.plus({ days: dayOffset });
         const dayName = day.toFormat('ccc dd');
-        const x = 10 + (dayOffset * dayWidth);
+        const x       = 10 + (dayOffset * dayWidth);
         
+        ctx.fillStyle = COLORS.black;
         // Draw day header background
-        ctx.fillStyle = COLORS.blue;
-        ctx.fillRect(x, headerY, dayWidth - 2, 25);
-        
+//        ctx.fillStyle = COLORS.blue;
+        ctx.fillRect(x, headerY+25, dayWidth - 2, 1);
+
         // Draw day header text
-        ctx.fillStyle = darkMode ? COLORS.black : COLORS.white;
-        ctx.font = `12px ${fontFamily}`;
+        ctx.font      = `12px ${fontFamily}`;
         ctx.fillText(dayName, x + 5, headerY + 18);
     }
     
     // Draw events
-    const eventY = headerY + 35;
-    const eventHeight = 30;
+    const eventY          = headerY + 35;
+    const eventHeight     = 40;
     const maxEventsPerDay = Math.floor((height - eventY - 10) / eventHeight);
     
     // Group events by day
@@ -528,25 +528,25 @@ function renderWeekView(ctx, width, height, events, fontFamily, darkMode) {
         for (const event of eventsToday) {
             if (eventCount >= maxEventsPerDay) break;
             
-            const y = eventY + (eventCount * eventHeight);
+            const y       = eventY + (eventCount * eventHeight);
             const timeStr = event.start.toFormat('HH:mm');
             //const summary = event.summary;//.substring(0, 16); // Truncate long titles
 	    
             // Draw event box
-            ctx.fillStyle = COLORS.yellow;
-            ctx.fillRect(x, y, dayWidth - 2, eventHeight - 2);
+//            ctx.fillStyle = COLORS.yellow;
+//            ctx.fillRect(x, y, dayWidth - 2, eventHeight - 2);
             
             ctx.strokeStyle = COLORS.black;
-            ctx.lineWidth = 1;
+            ctx.lineWidth   = 1;
             ctx.strokeRect(x, y, dayWidth - 2, eventHeight - 2);
 
             // Draw event text
-            ctx.fillStyle = darkMode ? COLORS.white : COLORS.black;
-            ctx.font = `10px ${fontFamily}`;
-            ctx.fillText(timeStr, x + 2, y + 10);
+            ctx.fillStyle = COLORS.black;
+            ctx.font      = `12px ${fontFamily}`;
+            ctx.fillText(timeStr, x + 2, y + 12);
 
 	    const summary = determineClipLen(ctx, dayWidth-4, event.summary);
-            ctx.fillText(summary, x + 2, y + 20);
+            ctx.fillText(summary, x + 2, y + 24);
             
             eventCount++;
         }
@@ -554,9 +554,9 @@ function renderWeekView(ctx, width, height, events, fontFamily, darkMode) {
         // Show "+N more" if there are more events
         if (eventsToday.length > maxEventsPerDay) {
             const moreCount = eventsToday.length - maxEventsPerDay;
-            const y = eventY + (maxEventsPerDay * eventHeight);
-            ctx.fillStyle = COLORS.red;
-            ctx.font = `10px ${fontFamily}`;
+            const y         = eventY + (maxEventsPerDay * eventHeight);
+            ctx.fillStyle   = COLORS.red;
+            ctx.font        = `10px ${fontFamily}`;
             ctx.fillText(`+${moreCount} more`, x + 2, y + 10);
         }
     }
@@ -771,17 +771,17 @@ function setupCLI() {
             }
             
             const renderOptions = {
-                width: options.width,
-                height: options.height,
-                viewMode: options.view,
-                outputFile: options.output,
-                calendarUrls: options.calendar,
-                calendarIds: options.googleCalendar,
-                includePrimary: options.includePrimary,
+                width:              options.width,
+                height:             options.height,
+                viewMode:           options.view,
+                outputFile:         options.output,
+                calendarUrls:       options.calendar,
+                calendarIds:        options.googleCalendar,
+                includePrimary:     options.includePrimary,
                 serviceAccountPath: options.serviceAccount,
-                fontPath: options.font,
-                maxResults: options.maxResults,
-		dark: options.dark
+                fontPath:           options.font,
+                maxResults:         options.maxResults,
+		dark:               options.dark
             };
             
             try {
